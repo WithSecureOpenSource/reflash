@@ -1,0 +1,415 @@
+#! /usr/bin/env python
+
+import os
+import sys
+import time
+import threading
+from PyQt4 import QtCore, QtGui
+from PyQt4.QtCore import * 
+from PyQt4.QtGui import *
+
+import dbtool
+import proxy
+
+import tempfile
+import shutil
+import shlex
+
+from optparse import OptionParser
+
+try:
+    _fromUtf8 = QtCore.QString.fromUtf8
+except AttributeError:
+    def _fromUtf8(s):
+        return s
+
+try:
+    _encoding = QtGui.QApplication.UnicodeUTF8
+    def _translate(context, text, disambig):
+        return QtGui.QApplication.translate(context, text, disambig, _encoding)
+except AttributeError:
+    def _translate(context, text, disambig):
+        return QtGui.QApplication.translate(context, text, disambig)
+
+
+class Ui_ReflashMonitor(object):
+    def setupUi(self, ReflashMonitor, options):
+        self.options = options
+        self.stopEvent = None
+        
+        self.centralwidget = QtGui.QWidget(ReflashMonitor)
+        self.centralwidget.setObjectName(_fromUtf8("centralwidget"))
+        self.gridLayout = QtGui.QGridLayout(self.centralwidget)
+        self.gridLayout.setObjectName(_fromUtf8("gridLayout"))
+        self.fileRButton = QtGui.QRadioButton(self.centralwidget)
+        self.fileRButton.setObjectName(_fromUtf8("fileRButton"))
+        self.gridLayout.addWidget(self.fileRButton, 2, 0, 1, 1)
+        self.textBrowser = QtGui.QTextBrowser(self.centralwidget)
+        self.textBrowser.setEnabled(True)
+        self.textBrowser.setObjectName(_fromUtf8("textBrowser"))
+        self.textBrowser.setStyleSheet("background-color : black; color : lightgrey;")
+        self.gridLayout.addWidget(self.textBrowser, 6, 0, 1, 4)
+        self.fileselectButton = QtGui.QPushButton(self.centralwidget)
+        self.fileselectButton.setEnabled(False)
+        sizePolicy = QtGui.QSizePolicy(QtGui.QSizePolicy.Fixed, QtGui.QSizePolicy.Fixed)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
+        sizePolicy.setHeightForWidth(self.fileselectButton.sizePolicy().hasHeightForWidth())
+        self.fileselectButton.setSizePolicy(sizePolicy)
+        self.fileselectButton.setObjectName(_fromUtf8("fileselectButton"))
+        self.gridLayout.addWidget(self.fileselectButton, 2, 1, 1, 1)
+        self.outputLabel = QtGui.QLabel(self.centralwidget)
+        self.outputLabel.setObjectName(_fromUtf8("outputLabel"))
+        self.gridLayout.addWidget(self.outputLabel, 5, 0, 1, 1)
+        self.timeoutText = QtGui.QLineEdit(self.centralwidget)
+        sizePolicy = QtGui.QSizePolicy(QtGui.QSizePolicy.Fixed, QtGui.QSizePolicy.Fixed)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
+        sizePolicy.setHeightForWidth(self.timeoutText.sizePolicy().hasHeightForWidth())
+        self.timeoutText.setSizePolicy(sizePolicy)
+        self.timeoutText.setObjectName(_fromUtf8("timeoutText"))
+        self.gridLayout.addWidget(self.timeoutText, 0, 2, 1, 1)
+        self.startButton = QtGui.QPushButton(self.centralwidget)
+        sizePolicy = QtGui.QSizePolicy(QtGui.QSizePolicy.Fixed, QtGui.QSizePolicy.Fixed)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
+        sizePolicy.setHeightForWidth(self.startButton.sizePolicy().hasHeightForWidth())
+        self.startButton.setSizePolicy(sizePolicy)
+        self.startButton.setObjectName(_fromUtf8("startButton"))
+        self.gridLayout.addWidget(self.startButton, 4, 0, 1, 1)
+        self.stopButton = QtGui.QPushButton(self.centralwidget)
+        self.stopButton.setEnabled(False)
+        sizePolicy = QtGui.QSizePolicy(QtGui.QSizePolicy.Fixed, QtGui.QSizePolicy.Fixed)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
+        sizePolicy.setHeightForWidth(self.stopButton.sizePolicy().hasHeightForWidth())
+        self.stopButton.setSizePolicy(sizePolicy)
+        self.stopButton.setObjectName(_fromUtf8("stopButton"))
+        self.gridLayout.addWidget(self.stopButton, 4, 1, 1, 1)
+        self.timeoutLabel = QtGui.QLabel(self.centralwidget)
+        self.timeoutLabel.setObjectName(_fromUtf8("timeoutLabel"))
+        self.gridLayout.addWidget(self.timeoutLabel, 0, 1, 1, 1)
+        self.liveRButton = QtGui.QRadioButton(self.centralwidget)
+        self.liveRButton.setChecked(True)
+        self.liveRButton.setObjectName(_fromUtf8("liveRButton"))
+        self.gridLayout.addWidget(self.liveRButton, 0, 0, 1, 1)
+        self.runProgressBar = QtGui.QProgressBar(self.centralwidget)
+        self.runProgressBar.setEnabled(False)
+        sizePolicy = QtGui.QSizePolicy(QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Minimum)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
+        sizePolicy.setHeightForWidth(self.runProgressBar.sizePolicy().hasHeightForWidth())
+        self.runProgressBar.setSizePolicy(sizePolicy)
+        self.runProgressBar.setProperty("value", 0)
+        self.runProgressBar.setTextVisible(True)
+        self.runProgressBar.setInvertedAppearance(False)
+        self.runProgressBar.setFormat(_fromUtf8(""))
+        self.runProgressBar.setObjectName(_fromUtf8("runProgressBar"))
+        self.gridLayout.addWidget(self.runProgressBar, 4, 2, 1, 2)
+        self.dumpButton = QtGui.QPushButton(self.centralwidget)
+        sizePolicy = QtGui.QSizePolicy(QtGui.QSizePolicy.Fixed, QtGui.QSizePolicy.Fixed)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
+        sizePolicy.setHeightForWidth(self.dumpButton.sizePolicy().hasHeightForWidth())
+        self.dumpButton.setSizePolicy(sizePolicy)
+        self.dumpButton.setObjectName(_fromUtf8("dumpButton"))
+        self.gridLayout.addWidget(self.dumpButton, 1, 1, 1, 1)
+        self.dumpLabel = QtGui.QLabel(self.centralwidget)
+        sizePolicy = QtGui.QSizePolicy(QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Preferred)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
+        sizePolicy.setHeightForWidth(self.dumpLabel.sizePolicy().hasHeightForWidth())
+        self.dumpLabel.setSizePolicy(sizePolicy)
+        self.dumpLabel.setText(_fromUtf8(self.options.dumpdir))
+        self.dumpLabel.setObjectName(_fromUtf8("dumpLabel"))
+        self.gridLayout.addWidget(self.dumpLabel, 1, 2, 1, 2)
+        self.filenameLabel = QtGui.QLabel(self.centralwidget)
+        self.filenameLabel.setEnabled(False)
+        sizePolicy = QtGui.QSizePolicy(QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Preferred)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
+        sizePolicy.setHeightForWidth(self.filenameLabel.sizePolicy().hasHeightForWidth())
+        self.filenameLabel.setSizePolicy(sizePolicy)
+        self.filenameLabel.setText(_fromUtf8(self.options.input))
+        self.filenameLabel.setObjectName(_fromUtf8("filenameLabel"))
+        self.gridLayout.addWidget(self.filenameLabel, 2, 2, 1, 2)
+        self.landingButton = QtGui.QPushButton(self.centralwidget)
+        self.landingButton.setEnabled(False)
+        sizePolicy = QtGui.QSizePolicy(QtGui.QSizePolicy.Fixed, QtGui.QSizePolicy.Fixed)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
+        sizePolicy.setHeightForWidth(self.landingButton.sizePolicy().hasHeightForWidth())
+        self.landingButton.setSizePolicy(sizePolicy)
+        self.landingButton.setObjectName(_fromUtf8("landingButton"))
+        self.gridLayout.addWidget(self.landingButton, 3, 1, 1, 1)
+        self.landingpageLabel = QtGui.QLabel(self.centralwidget)
+        self.landingpageLabel.setText(_fromUtf8(self.options.landing_page))
+        self.landingpageLabel.setObjectName(_fromUtf8("landingpageLabel"))
+        self.gridLayout.addWidget(self.landingpageLabel, 3, 2, 1, 2)
+        ReflashMonitor.setCentralWidget(self.centralwidget)
+        self.statusbar = QtGui.QStatusBar(ReflashMonitor)
+        self.statusbar.setObjectName(_fromUtf8("statusbar"))
+        ReflashMonitor.setStatusBar(self.statusbar)
+
+        self.retranslateUi(ReflashMonitor)
+        
+        QtCore.QObject.connect(self.liveRButton, QtCore.SIGNAL(_fromUtf8("clicked()")), self.select_live)
+        QtCore.QObject.connect(self.fileRButton, QtCore.SIGNAL(_fromUtf8("clicked()")), self.select_file)
+        
+        QtCore.QObject.connect(self.startButton, QtCore.SIGNAL(_fromUtf8("clicked()")), self.do_start)
+        QtCore.QObject.connect(self.stopButton, QtCore.SIGNAL(_fromUtf8("clicked()")), self.do_stop)
+        QtCore.QObject.connect(self.fileselectButton, QtCore.SIGNAL(_fromUtf8("clicked()")), self.pick_file)
+        QtCore.QObject.connect(self.landingButton, QtCore.SIGNAL(_fromUtf8("clicked()")), self.pick_landingpage)
+        
+        QtCore.QObject.connect(self.dumpButton, QtCore.SIGNAL(_fromUtf8("clicked()")), self.pick_dumpdir)
+        
+        QtCore.QMetaObject.connectSlotsByName(ReflashMonitor)
+
+    def retranslateUi(self, ReflashMonitor):
+        ReflashMonitor.setWindowTitle(_translate("ReflashMonitor", "Reflash Monitor", None))
+        self.fileRButton.setText(_translate("ReflashMonitor", "File", None))
+        self.fileselectButton.setText(_translate("ReflashMonitor", "Input file", None))
+        self.outputLabel.setText(_translate("ReflashMonitor", "Output", None))
+        self.timeoutText.setText(_translate("ReflashMonitor", str(self.options.timeout), None))
+        self.startButton.setText(_translate("ReflashMonitor", "Start", None))
+        self.stopButton.setText(_translate("ReflashMonitor", "Stop", None))
+        self.timeoutLabel.setText(_translate("ReflashMonitor", "Timeout (sec)", None))
+        self.liveRButton.setText(_translate("ReflashMonitor", "Live", None))
+        self.dumpButton.setText(_translate("ReflashMonitor", "Dump dir", None))
+        self.landingButton.setText(_translate("ReflashMonitor", "LandPage", None))
+        
+        if self.options.landing_page or self.options.input:
+            self.liveRButton.setChecked(False)
+            self.fileRButton.setChecked(True)
+            self.fileselectButton.setEnabled(True)
+            self.filenameLabel.setEnabled(True)
+            self.landingpageLabel.setEnabled(True)
+            self.landingButton.setEnabled(True)            
+
+        if self.options.auto == True:
+            self.do_start()
+
+    def do_start(self):
+        
+        if self.fileRButton.isChecked() == True and \
+            (self.landingpageLabel.text() == "" or self.filenameLabel.text() == ""):
+            QMessageBox.about(self.centralwidget, "Monitor", "Please provide input file and landing page!")
+            return
+        
+        self.startButton.setEnabled(False)
+        self.timeoutLabel.setEnabled(False)
+        self.timeoutText.setEnabled(False)
+        self.liveRButton.setEnabled(False)
+        self.fileRButton.setEnabled(False)
+        self.dumpButton.setEnabled(False)
+        self.dumpLabel.setEnabled(False)
+        
+        self.runProgressBar.setEnabled(True)
+        self.stopButton.setEnabled(True)
+        
+        if self.fileRButton.isChecked() == True:
+            self.fileselectButton.setEnabled(False)
+            self.filenameLabel.setEnabled(False)
+            self.landingButton.setEnabled(False)
+            self.landingpageLabel.setEnabled(False)
+            
+        # Create a temporary directory
+        self.options.logdir = tempfile.mkdtemp()
+        
+        # Run proxy
+        self.runProxyThread = RunProxyThread(self)
+        self.runProxyThread.out.connect(self.textBrowser.append)
+        self.runProxyThread.start()
+        
+        # Udate progress bar
+        self.runUpdateThread = RunUpdateThread(self, self.timeoutText.text().toUInt(10))
+        self.runUpdateThread.out.connect(self.textBrowser.append)
+        QtCore.QObject.connect(self.runUpdateThread, QtCore.SIGNAL("stopped()"), self.do_stop)
+        QtCore.QObject.connect(self.runUpdateThread, QtCore.SIGNAL("progress(int)"),
+            self.runProgressBar, QtCore.SLOT("setValue(int)"), QtCore.Qt.QueuedConnection)
+        self.runUpdateThread.start()
+        
+    def do_stop(self):
+        self.timeoutLabel.setEnabled(True)
+        self.timeoutText.setEnabled(True)
+        self.liveRButton.setEnabled(True)
+        self.fileRButton.setEnabled(True)
+        self.dumpButton.setEnabled(True)
+        self.dumpLabel.setEnabled(True)
+        
+        self.runProgressBar.setEnabled(False)
+        self.stopButton.setEnabled(False)
+        
+        if self.fileRButton.isChecked() == True:
+            self.fileselectButton.setEnabled(True)
+            self.filenameLabel.setEnabled(True)
+            self.landingpageLabel.setEnabled(True)
+            self.landingButton.setEnabled(True)
+        
+        self.runUpdateThread.terminate()
+        
+        if self.stopEvent:
+            self.stopEvent.set()
+        self.runProxyThread.terminate()
+        
+        # Create database and clean up:
+        self.createDbThread = CreateDbThread(self)
+        self.createDbThread.out.connect(self.textBrowser.append)
+        QtCore.QObject.connect(self.createDbThread, QtCore.SIGNAL("db_ready(QString)"), self.save_db)
+        QtCore.QObject.connect(self.createDbThread, QtCore.SIGNAL("db_failed()"), self.no_db)
+        self.createDbThread.start()
+        
+        self.runUpdateThread.out.emit("Stopped.")
+        
+    def no_db(self):
+        self.startButton.setEnabled(True)
+        
+    def save_db(self, filename):
+        self.runUpdateThread.out.emit("Done.")
+        name = QtGui.QFileDialog.getSaveFileName(self.centralwidget, 'Save database as...', os.path.curdir)
+        if name:
+            shutil.copy(filename, name)
+        os.remove(filename)
+        shutil.rmtree(self.options.logdir)
+        self.startButton.setEnabled(True)
+        
+    def select_file(self):
+        self.fileselectButton.setEnabled(True)
+        self.filenameLabel.setEnabled(True)
+        self.landingpageLabel.setEnabled(True)
+        self.landingButton.setEnabled(True)
+        
+    def select_live(self):
+        self.fileselectButton.setEnabled(False)
+        self.filenameLabel.setEnabled(False)
+        self.landingpageLabel.setEnabled(False)
+        self.landingButton.setEnabled(False)
+        
+    def pick_file(self):
+        name = QtGui.QFileDialog.getOpenFileName(self.centralwidget, 'Select Input File', os.path.curdir)
+        if name:
+            self.filenameLabel.setText(name)
+            
+    def pick_landingpage(self):
+        name = QtGui.QFileDialog.getOpenFileName(self.centralwidget, 'Select Landing Page', os.path.curdir)
+        if name:
+            self.landingpageLabel.setText(name)
+
+    def pick_dumpdir(self):
+        dialog = QtGui.QFileDialog()
+        dialog.setFileMode(QtGui.QFileDialog.Directory)
+        dialog.setOption(QtGui.QFileDialog.ShowDirsOnly)
+        directory = dialog.getExistingDirectory(self.centralwidget, 'Choose Dump Directory', os.path.curdir)
+    
+        if directory:
+            self.dumpLabel.setText(directory)
+
+class CreateDbThread(QThread):
+    
+    out = QtCore.pyqtSignal([str], [unicode])
+    
+    def __init__(self, parent):
+        QThread.__init__(self)
+        self.parent = parent
+        
+    def run(self):
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmpname = tmp.name
+        tmp.close()
+        self.out.emit("Creating database, please wait...")
+        if dbtool.create(self.parent.options.logdir, tmpname):
+            self.emit(SIGNAL("db_ready(QString)"), tmpname)
+        else:
+            self.out.emit("Nothing was logged.")
+            os.remove(tmpname)
+            self.emit(SIGNAL("db_failed()"))
+
+class RunProxyThread(QThread):
+    
+    out = QtCore.pyqtSignal([str], [unicode])
+    
+    def __init__(self, parent):
+        QThread.__init__(self)
+        self.parent = parent
+        parent.options.dumpdir = str(parent.dumpLabel.text())
+        parent.options.timeout = str(self.parent.timeoutText.text())
+        if parent.fileRButton.isChecked() == True:
+            parent.options.input = str(parent.filenameLabel.text())
+            parent.options.landing_page = str(parent.landingpageLabel.text())
+        
+    def log_cb(self, msg):
+        self.out.emit(msg)
+    
+    def run(self):
+        self.parent.stopEvent = threading.Event()
+        self.parent.options.log_cb = self.log_cb
+        proxy.run_proxy(self.parent.options, self.parent.stopEvent)
+
+class RunUpdateThread(QThread):
+    
+    out = QtCore.pyqtSignal([str], [unicode])
+
+    def __init__(self, parent, timeout):
+        QThread.__init__(self)
+        self.parent = parent
+        self.timeout = timeout[0] * 10
+        
+    def __del__(self):
+        self.wait()
+
+    def run(self):
+        self.emit(SIGNAL("progress(int)"), 0)
+        for i in range(1, self.timeout+1):
+            time.sleep(0.1)
+            self.emit(SIGNAL("progress(int)"), i * 100/self.timeout)
+
+        self.emit(SIGNAL("stopped()"))
+
+
+class MonitorMainWindow(QtGui.QMainWindow):
+    def __init__(self, ui):
+        super(MonitorMainWindow, self).__init__()
+        self.ui = ui
+        self.readSettings()
+
+    def closeEvent(self, e):
+        self.writeSettings()
+    
+    def readSettings(self):
+        settings = QSettings("ReflashMonitor", "ReflashMonitor")
+        settings.beginGroup("MainWindow")
+        self.resize(settings.value("size", QVariant(QSize(842, 475))).toSize())
+        self.move(settings.value("pos", QVariant(QPoint(50, 50))).toPoint())
+        settings.endGroup()
+
+    def writeSettings(self):
+        settings = QSettings("ReflashMonitor", "ReflashMonitor")
+        settings.beginGroup("MainWindow")
+        settings.setValue("size", QVariant(self.size()))
+        settings.setValue("pos", QVariant(self.pos()))
+        settings.endGroup()
+
+def main(argv):
+    
+    usage = "Usage: %prog [Options]"
+    opt_parser = OptionParser(usage=usage)
+    opt_parser.add_option('-A', '--auto', action = 'store_true', dest = 'auto', help = 'Start monitoring (default=false)')
+
+    options = proxy.read_cmdline(argv, opt_parser)
+    
+    if options.input and not os.path.exists(options.input):
+        print "Input file doesn't exist!"
+        sys.exit(0)
+    
+    app = QtGui.QApplication(argv)
+    ui = Ui_ReflashMonitor()
+    MainWindow = MonitorMainWindow(ui)
+    ui.setupUi(MainWindow, options)
+    MainWindow.show()
+    
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+     main(sys.argv)
+

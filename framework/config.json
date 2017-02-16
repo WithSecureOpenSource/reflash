@@ -1,0 +1,16 @@
+{
+    "proxyConfig":{
+        "flash_in": "Instrument.swf.template",
+        "cadir": "cadir"
+    },
+    "reflashConfig":{
+        "quiet":true,
+        "opcodeHooks":[
+                "call.*",
+                "init.*",
+                ".etproperty",
+                "construct.*"
+        ]
+    }
+}
+

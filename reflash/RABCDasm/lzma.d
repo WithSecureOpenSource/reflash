@@ -1,0 +1,132 @@
+/*
+ *  Copyright 2012, 2013, 2014, 2016 Vladimir Panteleev <vladimir@thecybershadow.net>
+ *  This file is part of RABCDAsm.
+ *
+ *  RABCDAsm is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  RABCDAsm is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with RABCDAsm.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+module lzma;
+
+version(HAVE_LZMA) {} else static assert(0, "LZMA is not available (HAVE_LZMA version is not defined)");
+
+import deimos.lzma;
+import std.conv;
+import std.exception;
+import std.string : format;
+
+version (Windows)
+	{ pragma(lib, "liblzma"); }
+else
+	{ pragma(lib, "lzma"); }
+
+align(1) struct LZMAHeader
+{
+align(1):
+	ubyte compressionParameters;
+	uint dictionarySize;
+	long decompressedSize = -1;
+}
+static assert(LZMAHeader.sizeof == 13);
+
+ubyte[] lzmaDecompress(LZMAHeader header, in ubyte[] compressedData)
+{
+	lzma_stream strm;
+	lzmaEnforce(lzma_alone_decoder(&strm, ulong.max), "lzma_alone_decoder");
+	scope(exit) lzma_end(&strm);
+
+	auto outBuf = new ubyte[1024];
+	size_t pos = 0;
+
+	void decompress(in ubyte[] chunk)
+	{
+		strm.next_in   = chunk.ptr;
+		strm.avail_in  = chunk.length;
+
+	again:
+		strm.next_out  = outBuf.ptr    + pos;
+		strm.avail_out = outBuf.length - pos;
+		auto ret = lzma_code(&strm, lzma_action.LZMA_RUN);
+		pos = strm.next_out - outBuf.ptr;
+
+		if (ret == lzma_ret.LZMA_OK && strm.avail_in && !strm.avail_out)
+		{
+			outBuf.length = outBuf.length * 2;
+			goto again;
+		}
+		lzmaEnforce!true(ret, "lzma_code (LZMA_RUN)");
+		enforce(strm.avail_in == 0, "Not all data was read");
+	}
+
+	header.decompressedSize = -1; // Required as Flash uses End-of-Stream marker
+	fixDictSize(header.dictionarySize);
+	decompress(cast(ubyte[])(&header)[0..1]);
+	decompress(compressedData);
+
+	lzmaEnforce!true(lzma_code(&strm, lzma_action.LZMA_FINISH), "lzma_code (LZMA_FINISH)");
+
+//	enforce(strm.avail_out == 0,
+//		"Decompressed size mismatch (expected %d/0x%X, got %d/0x%X)".format(
+//			outBuf.length, outBuf.length,
+//			outBuf.length - strm.avail_out, outBuf.length - strm.avail_out,
+//	));
+
+	outBuf = outBuf[0..pos];
+
+	return outBuf;
+}
+
+ubyte[] lzmaCompress(in ubyte[] decompressedData, LZMAHeader* header)
+{
+	lzma_options_lzma opts;
+	enforce(lzma_lzma_preset(&opts, 9 | LZMA_PRESET_EXTREME) == false, "lzma_lzma_preset error");
+
+	lzma_stream strm;
+	lzmaEnforce(lzma_alone_encoder(&strm, &opts), "lzma_alone_encoder");
+	scope(exit) lzma_end(&strm);
+
+	auto outBuf = new ubyte[decompressedData.length * 11 / 10 + 1024];
+	strm.next_out  = outBuf.ptr;
+	strm.avail_out = outBuf.length;
+	strm.next_in   = decompressedData.ptr;
+	strm.avail_in  = decompressedData.length;
+	lzmaEnforce(lzma_code(&strm, lzma_action.LZMA_RUN), "lzma_code (LZMA_RUN)");
+	enforce(strm.avail_in == 0, "Not all data was read");
+	enforce(strm.avail_out != 0, "Ran out of compression space");
+
+	lzmaEnforce!true(lzma_code(&strm, lzma_action.LZMA_FINISH), "lzma_code (LZMA_FINISH)");
+
+	*header = *cast(LZMAHeader*)outBuf.ptr;
+	return outBuf[LZMAHeader.sizeof..to!size_t(strm.total_out)];
+}
+
+private void lzmaEnforce(bool STREAM_END_OK=false)(lzma_ret v, string f)
+{
+	if (v != lzma_ret.LZMA_OK && (!STREAM_END_OK || v != lzma_ret.LZMA_STREAM_END))
+		throw new Exception(text(f, " error: ", v));
+}
+
+/// Work around an artificial lzma_alone_decoder limitation in liblzma
+/// which prevents it from accepting any streams with a dictionary size
+/// that is not 2^n or 2^n + 2^(n-1).
+/// See xz\src\liblzma\common\alone_decoder.c (git commit e7b424d267), line 87
+private void fixDictSize(ref uint d)
+{
+	--d;
+	d |= d >> 2;
+	d |= d >> 3;
+	d |= d >> 4;
+	d |= d >> 8;
+	d |= d >> 16;
+	++d;
+}
