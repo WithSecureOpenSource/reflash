@@ -182,8 +182,12 @@ def parse_disasm(dir, c):
                 if line[:2] != "  ":
                     s = line.split(":")
                     session = s[0]
+                    if re.search(session, "%d-%d"): continue
                     method = s[1]
-                    name = s[2]
+                    if len(s) > 2:
+                        name = s[2]
+                    else:
+                        name = "%s_%s_corrupted" % (session,method)
                     opcode_index = 0
                     c.execute("INSERT INTO methods (session_method,name) VALUES (?,?);", ("%s:%s" % (session,method), name))
 
